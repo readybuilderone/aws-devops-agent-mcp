@@ -49,3 +49,15 @@ def test_lambda_has_agent_space_env_var():
             })
         })
     })
+
+
+def test_tool_schema_is_extensible_list():
+    """Verify TOOL_SCHEMA is a list that can be extended without merge conflicts"""
+    from cdk.stacks.devops_agent_mcp_stack import TOOL_SCHEMA
+
+    assert isinstance(TOOL_SCHEMA, list), "TOOL_SCHEMA must be a list for easy extension"
+    assert len(TOOL_SCHEMA) >= 1, "TOOL_SCHEMA should have at least one tool"
+
+    # Verify the echo tool is present
+    tool_names = [tool.name for tool in TOOL_SCHEMA]
+    assert "devops_echo" in tool_names
