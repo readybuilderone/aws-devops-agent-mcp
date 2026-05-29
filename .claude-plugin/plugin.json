@@ -1,0 +1,7 @@
+{
+  "name": "devops-agent",
+  "description": "AWS DevOps Agent MCP integration for querying system health, alerts, incidents, and investigations",
+  "author": {
+    "name": "AWS"
+  }
+}

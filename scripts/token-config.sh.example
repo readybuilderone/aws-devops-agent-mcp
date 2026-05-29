@@ -1,0 +1,27 @@
+#!/bin/bash
+#
+# DevOps Agent MCP - Token配置文件
+#
+# 使用说明:
+# 1. 复制此文件: cp token-config.sh.example token-config.sh
+# 2. 填写下面的配置值
+# 3. 运行: ./refresh-token.sh
+#
+# 如何获取这些值? 参考 QUICKSTART.md
+#
+
+# Cognito Client ID (从CDK输出获取)
+CLIENT_ID="your-client-id-here"
+
+# Cognito Client Secret (从aws cognito-idp describe-user-pool-client获取)
+CLIENT_SECRET="your-client-secret-here"
+
+# Token Endpoint (从CDK输出获取)
+TOKEN_ENDPOINT="https://xxxxx.auth.us-west-2.amazoncognito.com/oauth2/token"
+
+# MCP服务器Hash Key (从~/.claude/.credentials.json获取)
+# 格式: devops-agent|xxxxxxxxxx
+HASH_KEY="devops-agent|your-hash-here"
+
+# OAuth Scopes (通常不需要修改)
+SCOPE="DevOpsAgentMcpStack-Gateway-0299DE6E/read DevOpsAgentMcpStack-Gateway-0299DE6E/write"
