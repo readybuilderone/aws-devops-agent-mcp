@@ -6,3 +6,6 @@ dist/
 cdk.out/
 .venv/
 node_modules/
+
+# Local OAuth credentials — never commit (contains CLIENT_SECRET)
+scripts/token-config.sh
