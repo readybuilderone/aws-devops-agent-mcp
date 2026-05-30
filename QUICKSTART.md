@@ -119,8 +119,9 @@ CLIENT_ID=$(aws cloudformation describe-stacks --stack-name $STACK --region $REG
 TOKEN_ENDPOINT=$(aws cloudformation describe-stacks --stack-name $STACK --region $REGION \
   --query 'Stacks[0].Outputs[?OutputKey==`TokenEndpoint`].OutputValue' --output text)
 
-USER_POOL_ID=$(aws cognito-idp list-user-pools --max-results 10 --region $REGION \
-  --query "UserPools[?contains(Name, 'DevOpsAgentMcpStack')].Id" --output text)
+# 从Stack资源拿User Pool —— Gateway建的pool名字不含stack名，按名字过滤会查不到
+USER_POOL_ID=$(aws cloudformation describe-stack-resources --stack-name $STACK --region $REGION \
+  --query "StackResources[?ResourceType=='AWS::Cognito::UserPool'].PhysicalResourceId | [0]" --output text)
 
 # resource server标识符（用于拼scope）
 RESOURCE_SERVER=$(aws cognito-idp list-resource-servers --user-pool-id $USER_POOL_ID \

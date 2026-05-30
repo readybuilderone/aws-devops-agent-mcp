@@ -162,9 +162,9 @@ curl -X POST https://devopsagentmcpstack-gateway-0299de6e.auth.us-west-2.amazonc
 #### 选项B：通过AWS CLI创建用户
 
 ```bash
-# 获取User Pool ID
-aws cognito-idp list-user-pools --max-results 10 --region us-west-2 \
-  --query "UserPools[?contains(Name, 'DevOpsAgentMcpStack')].Id" --output text
+# 获取User Pool ID（从Stack资源取，Gateway建的pool名字不含stack名）
+aws cloudformation describe-stack-resources --stack-name DevOpsAgentMcpStack --region us-west-2 \
+  --query "StackResources[?ResourceType=='AWS::Cognito::UserPool'].PhysicalResourceId | [0]" --output text
 
 # 创建用户（替换 <USER_POOL_ID>）
 aws cognito-idp admin-create-user \
