@@ -80,6 +80,7 @@ AWS DevOps Agent On-Demand API
 - ✅ OAuth 2.0 Client Credentials认证
 - ✅ AgentCore Gateway集成
 - ✅ 基础工具测试框架
+- ✅ Token刷新脚本（`scripts/refresh-token.sh` + cron）
 
 ### 待实现
 - 🚧 查询Agent Space列表
@@ -87,7 +88,6 @@ AWS DevOps Agent On-Demand API
 - 🚧 查询告警和事件
 - 🚧 多轮对话支持（session_id）
 - 🚧 上下文感知（context_scope）
-- 🚧 Token自动刷新机制
 
 ## 📊 项目结构
 
