@@ -9,3 +9,6 @@ node_modules/
 
 # Local OAuth credentials — never commit (contains CLIENT_SECRET)
 scripts/token-config.sh
+
+# Cached access token written by scripts/get-headers.sh
+devops-agent-mcp-token.cache

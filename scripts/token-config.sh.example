@@ -5,23 +5,22 @@
 # 使用说明:
 # 1. 复制此文件: cp token-config.sh.example token-config.sh
 # 2. 填写下面的配置值
-# 3. 运行: ./refresh-token.sh
+# 3. 在 .mcp.json 中配置 headersHelper 指向 scripts/get-headers.sh
+#
+# get-headers.sh 会在每次MCP连接时读取本文件、自动获取并缓存token。
+# 无需 HASH_KEY，无需手动注入 ~/.claude/.credentials.json，无需cron，无需重启。
 #
 # 如何获取这些值? 参考 QUICKSTART.md
 #
 
-# Cognito Client ID (从CDK输出获取)
+# Cognito Client ID (从CDK输出的ClientId获取)
 CLIENT_ID="your-client-id-here"
 
 # Cognito Client Secret (从aws cognito-idp describe-user-pool-client获取)
 CLIENT_SECRET="your-client-secret-here"
 
-# Token Endpoint (从CDK输出获取)
+# Token Endpoint (从CDK输出的TokenEndpoint获取)
 TOKEN_ENDPOINT="https://xxxxx.auth.us-west-2.amazoncognito.com/oauth2/token"
 
-# MCP服务器Hash Key (从~/.claude/.credentials.json获取)
-# 格式: devops-agent|xxxxxxxxxx
-HASH_KEY="devops-agent|your-hash-here"
-
-# OAuth Scopes (通常不需要修改)
-SCOPE="DevOpsAgentMcpStack-Gateway-0299DE6E/read DevOpsAgentMcpStack-Gateway-0299DE6E/write"
+# OAuth Scopes (从CDK输出或 aws cognito-idp list-resource-servers 获取)
+SCOPE="DevOpsAgentMcpStack-Gateway-XXXXXXXX/read DevOpsAgentMcpStack-Gateway-XXXXXXXX/write"

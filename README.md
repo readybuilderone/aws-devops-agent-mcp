@@ -34,15 +34,12 @@
 ### 自动化脚本
 
 ```bash
-# 一键设置（交互式）
+# 一键设置（交互式）—— 获取凭证、配置OAuth、写token-config.sh、注册MCP
 ./scripts/setup.sh
-
-# 刷新access token
-./scripts/refresh-token.sh
-
-# 设置自动刷新（每50分钟）
-(crontab -l; echo "*/50 * * * * $(pwd)/scripts/refresh-token.sh") | crontab -
 ```
+
+token由 `scripts/get-headers.sh`（headersHelper）在每次连接时自动获取并缓存，
+过期会自动续期 —— **无需手动刷新、无需cron、无需重启Claude Code**。
 
 ### 可用工具
 
@@ -80,7 +77,7 @@ AWS DevOps Agent On-Demand API
 - ✅ OAuth 2.0 Client Credentials认证
 - ✅ AgentCore Gateway集成
 - ✅ 基础工具测试框架
-- ✅ Token刷新脚本（`scripts/refresh-token.sh` + cron）
+- ✅ Token自动刷新（`scripts/get-headers.sh` + Claude Code headersHelper）
 
 ### 待实现
 - 🚧 查询Agent Space列表
@@ -105,7 +102,7 @@ AWS DevOps Agent On-Demand API
 │   └── requirements.txt       # Python依赖
 └── scripts/                   # 自动化脚本
     ├── setup.sh               # 一键设置脚本
-    ├── refresh-token.sh       # Token刷新脚本
+    ├── get-headers.sh         # headersHelper：连接时自动获取/缓存token
     └── token-config.sh.example # 配置模板
 ```
 
