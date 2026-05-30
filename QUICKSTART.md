@@ -96,9 +96,9 @@ claude mcp add-json devops-agent '{
 ```bash
 claude mcp add-json devops-agent '{
   "type": "http",
-  "url": "https://devops-agent-mcp-elhze1stwj.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp",
+  "url": "https://devops-agent-mcp-xxxxx.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp",
   "oauth": {
-    "clientId": "<COGNITO_CLIENT_ID>"
+    "clientId": "YOUR_CLIENT_ID"
   }
 }'
 ```
@@ -107,6 +107,18 @@ claude mcp add-json devops-agent '{
 ```
 Added http MCP server devops-agent to local config
 ```
+
+> **💡 关于`oauth.clientId`的作用**
+>
+> 这个配置**不是**让你走浏览器登录。它的作用是让Claude Code在
+> `~/.claude/.credentials.json` 中为本服务器创建一个OAuth条目
+> （key形如 `devops-agent|<hash>`）。
+>
+> 由于Claude Code原生只支持Authorization Code（浏览器登录）流程，而本项目
+> 使用的是Client Credentials（M2M）流程，我们会在步骤3-4中用脚本**直接获取
+> 并注入token**到这个条目里，从而绕过浏览器登录。
+>
+> 详见 `docs/authorization-code-attempt-postmortem.md`。
 
 ### 2.3 验证MCP服务器已添加
 
@@ -121,196 +133,147 @@ devops-agent: https://devops-agent-mcp-xxxxx... (HTTP) - ! Needs authentication
 
 ---
 
-## 🔐 步骤3: 配置OAuth认证
+## 🔐 步骤3: 准备Cognito凭证
 
-由于技术限制，我们使用Client Credentials流程（机器对机器认证，无需用户登录）。
+由于Claude Code原生不支持Client Credentials，我们手动获取token后注入。本步骤
+收集所需凭证。
 
-### 3.1 获取User Pool ID
+> **💡 提示**：步骤3-4可以用一键脚本 `./scripts/setup.sh` 全部自动完成。
+> 下面是脚本背后的手动步骤，便于理解和排查。
+
+### 3.1 收集Client ID、User Pool ID和Token Endpoint
 
 ```bash
-aws cloudformation describe-stacks \
+# Client ID (从CDK输出)
+CLIENT_ID=$(aws cloudformation describe-stacks \
   --stack-name DevOpsAgentMcpStack \
   --region us-west-2 \
   --query 'Stacks[0].Outputs[?OutputKey==`ClientId`].OutputValue' \
-  --output text
-```
+  --output text)
 
-记录输出的Client ID。
-
-### 3.2 获取Client Secret
-
-```bash
-# 先获取User Pool ID
+# User Pool ID
 USER_POOL_ID=$(aws cognito-idp list-user-pools \
   --max-results 10 \
   --region us-west-2 \
   --query "UserPools[?contains(Name, 'DevOpsAgentMcpStack')].Id" \
   --output text)
 
-echo "User Pool ID: $USER_POOL_ID"
-
-# 获取Client Secret
-CLIENT_ID="YOUR_CLIENT_ID_FROM_STEP_2.2"
-
-aws cognito-idp describe-user-pool-client \
-  --user-pool-id $USER_POOL_ID \
-  --client-id $CLIENT_ID \
-  --region us-west-2 \
-  --query 'UserPoolClient.ClientSecret' \
-  --output text
-```
-
-**⚠️ 记录输出的Client Secret！它只显示一次。**
-
-### 3.3 配置Cognito支持Client Credentials
-
-```bash
-# 设置变量
-USER_POOL_ID="us-west-2_XXXXXXXX"  # 从3.2获取
-CLIENT_ID="xxxxxxxxxxxxxxxxxx"      # 从2.2获取
-
-# 更新OAuth配置
-aws cognito-idp update-user-pool-client \
-  --user-pool-id $USER_POOL_ID \
-  --client-id $CLIENT_ID \
-  --allowed-o-auth-flows client_credentials \
-  --allowed-o-auth-scopes \
-    "DevOpsAgentMcpStack-Gateway-0299DE6E/read" \
-    "DevOpsAgentMcpStack-Gateway-0299DE6E/write" \
-  --allowed-o-auth-flows-user-pool-client \
-  --region us-west-2
-```
-
-**成功提示**：
-```json
-{
-    "UserPoolClient": {
-        "AllowedOAuthFlows": ["client_credentials"],
-        ...
-    }
-}
-```
-
----
-
-## 🎫 步骤4: 获取并注入Access Token
-
-### 4.1 获取Token Endpoint
-
-从步骤1的输出或重新查询：
-
-```bash
+# Token Endpoint (从CDK输出)
 TOKEN_ENDPOINT=$(aws cloudformation describe-stacks \
   --stack-name DevOpsAgentMcpStack \
   --region us-west-2 \
   --query 'Stacks[0].Outputs[?OutputKey==`TokenEndpoint`].OutputValue' \
   --output text)
 
-echo $TOKEN_ENDPOINT
+echo "Client ID:      $CLIENT_ID"
+echo "User Pool ID:   $USER_POOL_ID"
+echo "Token Endpoint: $TOKEN_ENDPOINT"
 ```
 
-### 4.2 获取Access Token
+### 3.2 获取Client Secret
 
 ```bash
-# 设置变量
-CLIENT_ID="xxxxxxxxxxxxxxxxxx"          # 从步骤2.2
-CLIENT_SECRET="yyyyyyyyyyyyyyyyyyyyy"   # 从步骤3.2
-TOKEN_ENDPOINT="https://xxxxx.auth.us-west-2.amazoncognito.com/oauth2/token"
+CLIENT_SECRET=$(aws cognito-idp describe-user-pool-client \
+  --user-pool-id $USER_POOL_ID \
+  --client-id $CLIENT_ID \
+  --region us-west-2 \
+  --query 'UserPoolClient.ClientSecret' \
+  --output text)
 
-# 获取token
-curl -X POST $TOKEN_ENDPOINT \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -u "$CLIENT_ID:$CLIENT_SECRET" \
-  -d "grant_type=client_credentials&scope=DevOpsAgentMcpStack-Gateway-0299DE6E/read%20DevOpsAgentMcpStack-Gateway-0299DE6E/write" \
-  | python3 -m json.tool
+echo "Client Secret: $CLIENT_SECRET"
 ```
 
-**成功响应**：
-```json
-{
-    "access_token": "eyJraWQiOiJqOXlFUVRNeEt...",
-    "expires_in": 3600,
-    "token_type": "Bearer"
-}
-```
+**⚠️ Client Secret是机密，请勿提交到git或分享。**
 
-**⚠️ 复制完整的`access_token`值！**
+### 3.3 确认Cognito使用Client Credentials流程
 
-### 4.3 找到MCP配置的Hash值
+App Client默认应已配置为 `client_credentials`。验证：
 
 ```bash
-# 查看credentials文件
-cat ~/.claude/.credentials.json | python3 -m json.tool | grep -A5 devops-agent
+aws cognito-idp describe-user-pool-client \
+  --user-pool-id $USER_POOL_ID \
+  --client-id $CLIENT_ID \
+  --region us-west-2 \
+  --query 'UserPoolClient.AllowedOAuthFlows' \
+  --output json
 ```
 
-找到类似这样的行：
-```json
-"devops-agent|2cb25a403a411c4b": {
-```
-
-记录完整的key（包括`devops-agent|`后面的hash）。
-
-### 4.4 注入Token
-
-创建一个临时Python脚本：
+应返回 `["client_credentials"]`。如果不是，运行以下命令修正
+（请先用实际的resource server标识符替换scope中的占位符——
+可在CDK输出或 `aws cognito-idp list-resource-servers` 中查到）：
 
 ```bash
-cat > inject_token.py << 'EOF'
-import json
-import sys
-
-if len(sys.argv) != 3:
-    print("用法: python3 inject_token.py <hash> <access_token>")
-    sys.exit(1)
-
-hash_key = sys.argv[1]  # 例如: devops-agent|2cb25a403a411c4b
-token = sys.argv[2]
-
-# 读取credentials
-creds_path = '/home/ubuntu/.claude/.credentials.json'
-with open(creds_path, 'r') as f:
-    creds = json.load(f)
-
-# 注入token
-if 'mcpOAuth' not in creds:
-    creds['mcpOAuth'] = {}
-
-if hash_key not in creds['mcpOAuth']:
-    print(f"错误: 找不到key '{hash_key}'")
-    print(f"可用的keys: {list(creds['mcpOAuth'].keys())}")
-    sys.exit(1)
-
-creds['mcpOAuth'][hash_key]['accessToken'] = token
-
-# 保存
-with open(creds_path, 'w') as f:
-    json.dump(creds, f, indent=2)
-
-print(f"✅ Token已注入到 {hash_key}")
-print(f"Token长度: {len(token)} 字符")
-EOF
+aws cognito-idp update-user-pool-client \
+  --user-pool-id $USER_POOL_ID \
+  --client-id $CLIENT_ID \
+  --allowed-o-auth-flows client_credentials \
+  --allowed-o-auth-scopes \
+    "<RESOURCE_SERVER_ID>/read" \
+    "<RESOURCE_SERVER_ID>/write" \
+  --allowed-o-auth-flows-user-pool-client \
+  --region us-west-2
 ```
 
-运行脚本：
+---
+
+## 🎫 步骤4: 获取并注入Access Token
+
+本项目提供了 `scripts/refresh-token.sh` 来自动完成"获取token → 注入到
+Claude Code"的全过程。你只需创建一份配置文件。
+
+### 4.1 找到MCP配置的Hash Key
+
+步骤2.2添加MCP服务器后，Claude Code会在credentials中创建一个OAuth条目。
+找到它的key：
 
 ```bash
-# 替换为你的实际值
-HASH_KEY="devops-agent|2cb25a403a411c4b"
-ACCESS_TOKEN="eyJraWQiOiJqOXlFUVRNeEt..."
-
-python3 inject_token.py "$HASH_KEY" "$ACCESS_TOKEN"
+cat ~/.claude/.credentials.json \
+  | python3 -c "import sys, json; print('\n'.join(k for k in json.load(sys.stdin).get('mcpOAuth', {}) if 'devops-agent' in k))"
 ```
+
+输出形如 `devops-agent|2cb25a403a411c4b`，记录完整的key。
+
+> 如果没有任何输出，说明MCP条目还没创建——请确认步骤2.2成功执行，
+> 并至少启动过一次Claude Code。
+
+### 4.2 创建token配置文件
+
+复制模板并填入步骤3收集的值：
+
+```bash
+cp scripts/token-config.sh.example scripts/token-config.sh
+chmod 600 scripts/token-config.sh   # 含密钥，限制权限
+```
+
+编辑 `scripts/token-config.sh`，填入：
+
+```bash
+CLIENT_ID="<步骤3.1的Client ID>"
+CLIENT_SECRET="<步骤3.2的Client Secret>"
+TOKEN_ENDPOINT="<步骤3.1的Token Endpoint>"
+HASH_KEY="<步骤4.1的Hash Key, 形如 devops-agent|xxxx>"
+SCOPE="<RESOURCE_SERVER_ID>/read <RESOURCE_SERVER_ID>/write"
+```
+
+> **🔒 安全提示**：`scripts/token-config.sh` 含Client Secret，已被
+> `.gitignore` 忽略，**不会**提交到git。请勿手动取消忽略。
+
+### 4.3 运行刷新脚本
+
+```bash
+./scripts/refresh-token.sh
+```
+
+脚本会自动：
+1. 用Client Credentials向Token Endpoint请求access token
+2. 备份 `~/.claude/.credentials.json`
+3. 把token注入到 `mcpOAuth[HASH_KEY].accessToken`
 
 **成功提示**：
 ```
-✅ Token已注入到 devops-agent|2cb25a403a411c4b
-Token长度: 941 字符
-```
-
-### 4.5 清理临时文件
-
-```bash
-rm inject_token.py
+[INFO] Token获取成功 (长度: 941)
+[INFO] ✅ Token注入成功！
+[WARN] 📝 请重启Claude Code以生效
 ```
 
 ---
@@ -416,10 +379,13 @@ aws cognito-idp describe-user-pool-client \
 **原因**: Access token有效期为3600秒（1小时）
 
 **解决方案**:
-重新运行步骤4.2-4.4获取新token并注入。
+重新运行刷新脚本即可：
 
-**自动化建议**（高级）:
-创建一个刷新脚本，设置cron任务每50分钟运行一次。
+```bash
+./scripts/refresh-token.sh
+```
+
+然后重启Claude Code。自动化方法见下方"设置Token自动刷新"。
 
 ### 问题5: 找不到hash key
 
@@ -457,65 +423,27 @@ cat ~/.claude/.credentials.json | python3 -c "import sys, json; data=json.load(s
 
 ## 💡 提示
 
-### 保存配置脚本
+### Token刷新
 
-建议将你的配置保存为脚本，方便下次使用：
+配置一次 `scripts/token-config.sh` 后，每次token过期只需重新运行：
 
 ```bash
-cat > refresh_token.sh << 'EOF'
-#!/bin/bash
-set -e
-
-# 配置变量（替换为你的实际值）
-CLIENT_ID="xxxxxxxxxxxxxxxxxx"
-CLIENT_SECRET="yyyyyyyyyyyyyyyyyyyyy"
-TOKEN_ENDPOINT="https://xxxxx.auth.us-west-2.amazoncognito.com/oauth2/token"
-HASH_KEY="devops-agent|2cb25a403a411c4b"
-
-# 获取新token
-echo "🔄 获取新token..."
-RESPONSE=$(curl -s -X POST $TOKEN_ENDPOINT \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -u "$CLIENT_ID:$CLIENT_SECRET" \
-  -d "grant_type=client_credentials&scope=DevOpsAgentMcpStack-Gateway-0299DE6E/read%20DevOpsAgentMcpStack-Gateway-0299DE6E/write")
-
-ACCESS_TOKEN=$(echo $RESPONSE | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
-
-# 注入token
-echo "💉 注入token..."
-python3 << PYEOF
-import json
-
-with open('~/.claude/.credentials.json', 'r') as f:
-    creds = json.load(f)
-
-creds['mcpOAuth']['$HASH_KEY']['accessToken'] = '$ACCESS_TOKEN'
-
-with open('~/.claude/.credentials.json', 'w') as f:
-    json.dump(creds, f, indent=2)
-PYEOF
-
-echo "✅ Token已刷新！"
-echo "📝 请重启Claude Code以生效"
-EOF
-
-chmod +x refresh_token.sh
+./scripts/refresh-token.sh
 ```
 
-使用：
-```bash
-./refresh_token.sh
-```
+然后重启Claude Code即可。无需重新填写任何凭证。
 
 ### 设置Token自动刷新
 
-```bash
-# 编辑crontab
-crontab -e
+用cron每50分钟自动刷新（token有效期1小时）：
 
-# 添加（每50分钟刷新一次）
-*/50 * * * * /path/to/refresh_token.sh >> /tmp/mcp_token_refresh.log 2>&1
+```bash
+# 添加到crontab（使用绝对路径）
+(crontab -l 2>/dev/null; echo "*/50 * * * * $(pwd)/scripts/refresh-token.sh >> /tmp/mcp_token_refresh.log 2>&1") | crontab -
 ```
+
+> 注意：自动刷新会更新credentials文件，但Claude Code需要重启才会加载新token。
+> 对于长时间运行的会话，过期后手动重启一次即可。
 
 ---
 
