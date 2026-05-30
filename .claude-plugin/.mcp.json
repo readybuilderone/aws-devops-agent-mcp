@@ -1,10 +1,9 @@
 {
-  "devops-agent": {
-    "type": "http",
-    "url": "https://devops-agent-mcp-elhze1stwj.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp",
-    "oauth": {
-      "clientId": "<COGNITO_CLIENT_ID>",
-      "callbackPort": 8080
+  "mcpServers": {
+    "devops-agent": {
+      "type": "http",
+      "url": "https://devops-agent-mcp-s5x9sysy8s.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp",
+      "headersHelper": "${CLAUDE_PLUGIN_ROOT}/scripts/get-headers.sh"
     }
   }
 }

@@ -5,54 +5,56 @@
 - **Stack名称**: DevOpsAgentMcpStack
 - **区域**: us-west-2
 - **状态**: CREATE_COMPLETE ✅
-- **Gateway URL**: https://devops-agent-mcp-elhze1stwj.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp
-- **Client ID**: <COGNITO_CLIENT_ID>
-- **Token Endpoint**: https://devopsagentmcpstack-gateway-0299de6e.auth.us-west-2.amazoncognito.com/oauth2/token
+- **Gateway URL**: 见 `cdk deploy` 输出的 `GatewayUrl`（每次部署可能变化）
+- **Client ID**: 见 `cdk deploy` 输出的 `ClientId`
+- **Token Endpoint**: 见 `cdk deploy` 输出的 `TokenEndpoint`
 
 ## 集成到Claude Code
 
-### ✅ 已配置完成
+> **当前方案：headersHelper（推荐）。** 完整的分步指南见
+> [QUICKSTART.md](./QUICKSTART.md)。本节只说明集成的关键点。
 
-**⚠️ 重要发现：必须使用CLI命令添加MCP服务器，手动编辑文件不会生效！**
+### 配置方法
 
-### 正确的配置方法
+Claude Code通过 `headersHelper` 机制对接：在MCP配置中指向
+`scripts/get-headers.sh`，它在每次连接时自动获取/缓存Cognito token
+并输出 `Authorization` header。
 
-使用 `claude mcp add-json` 命令添加MCP服务器：
+**方式A：作为插件（推荐）** —— `.claude-plugin/.mcp.json` 已配置：
+
+```json
+{
+  "mcpServers": {
+    "devops-agent": {
+      "type": "http",
+      "url": "<GatewayUrl>",
+      "headersHelper": "${CLAUDE_PLUGIN_ROOT}/scripts/get-headers.sh"
+    }
+  }
+}
+```
+
+**方式B：用CLI手动添加**：
 
 ```bash
-claude mcp add-json devops-agent '{
-  "type": "http",
-  "url": "https://devops-agent-mcp-elhze1stwj.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp",
-  "oauth": {
-    "clientId": "<COGNITO_CLIENT_ID>",
-    "callbackPort": 8080
-  }
-}'
+claude mcp add-json devops-agent "{
+  \"type\": \"http\",
+  \"url\": \"<GatewayUrl>\",
+  \"headersHelper\": \"$(pwd)/scripts/get-headers.sh\"
+}"
 ```
 
 **关键点：**
-- ✅ 使用 `claude mcp add-json` CLI命令
-- ✅ `"type": "http"` (不是 "url")
-- ✅ 包含 `callbackPort` 字段
-- ❌ 不要手动创建/编辑 `.mcp.json` 文件（会被忽略）
+- ✅ `"type": "http"`（或别名 `"streamable-http"`）
+- ✅ 用 `headersHelper` 提供token，**自动刷新、无需重启**
+- ✅ 凭证放在 git-ignored 的 `scripts/token-config.sh`
+- ❌ 不再需要 `oauth.clientId` / `callbackPort` / 浏览器登录
+- ❌ 不再需要手动注入 `~/.claude/.credentials.json`
 
 ### 验证配置成功
 
-配置成功后，运行 `/reload-plugins` 会看到MCP认证工具可用：
-- `mcp__devops-agent__authenticate`
-- `mcp__devops-agent__complete_authentication`
-
-### OAuth认证流程
-
-首次调用MCP工具时：
-1. Claude Code调用 `authenticate` 工具获取授权URL
-2. 自动打开浏览器到Cognito登录页
-3. 使用凭证登录：
-   - 用户名：`admin`
-   - 密码：`DevOpsAgent2026!`
-4. 登录成功后回调到 `localhost:8080`
-5. Claude Code调用 `complete_authentication` 完成认证
-6. 后续请求自动携带access token
+在Claude Code中运行 `/mcp`，应看到 `devops-agent` 为 `✓ Connected`。
+无需重启Claude Code。
 
 ## 认证授权机制
 
@@ -87,12 +89,12 @@ claude mcp add-json devops-agent '{
 
 ```bash
 aws cognito-idp update-user-pool-client \
-  --user-pool-id us-west-2_L0273ULfK \
-  --client-id <COGNITO_CLIENT_ID> \
+  --user-pool-id <USER_POOL_ID> \
+  --client-id <CLIENT_ID> \
   --allowed-o-auth-flows client_credentials \
   --allowed-o-auth-scopes \
-    "DevOpsAgentMcpStack-Gateway-0299DE6E/read" \
-    "DevOpsAgentMcpStack-Gateway-0299DE6E/write" \
+    "<RESOURCE_SERVER>/read" \
+    "<RESOURCE_SERVER>/write" \
   --allowed-o-auth-flows-user-pool-client \
   --region us-west-2
 ```
@@ -116,37 +118,31 @@ curl -X POST https://devopsagentmcpstack-gateway-0299de6e.auth.us-west-2.amazonc
 }
 ```
 
-#### 步骤3: 注入Token到Claude Code
+#### 步骤3: 通过 headersHelper 提供Token（自动）
 
-```python
-import json
-
-with open('~/.claude/.credentials.json', 'r') as f:
-    creds = json.load(f)
-
-# 找到devops-agent对应的key
-creds['mcpOAuth']['devops-agent|<hash>']['accessToken'] = '<access_token>'
-
-with open('~/.claude/.credentials.json', 'w') as f:
-    json.dump(creds, f, indent=2)
-```
-
-#### 步骤4: 重启Claude Code会话
+不再手动注入 `~/.claude/.credentials.json`。把上面 curl 的逻辑封装在
+`scripts/get-headers.sh` 中，由Claude Code在每次连接时调用：
 
 ```bash
-exit    # 退出
-claude  # 重新启动
-/reload-plugins  # 重新加载
+# scripts/token-config.sh 中填好 CLIENT_ID/CLIENT_SECRET/TOKEN_ENDPOINT/SCOPE 后
+./scripts/get-headers.sh
+# 输出: {"Authorization": "Bearer eyJ..."}
 ```
+
+`.mcp.json` 中 `headersHelper` 指向该脚本即可（见上文"配置方法"）。
+
+#### 步骤4: 完成
+
+无需重启。token过期时 `get-headers.sh` 会自动续期（带本地缓存）。
 
 **为什么Authorization Code不行？**
 - MCP客户端发送`resource`参数（RFC 8707）
 - Cognito不支持此参数
 - 导致`invalid_scope`错误
 
-**Client Credentials限制**：
+**Client Credentials特性**：
 - Token有效期1小时
-- 需要手动刷新
+- 由 `get-headers.sh` 自动刷新（无需手动、无需cron、无需重启）
 - 无用户交互，纯M2M认证
 
 ---
@@ -252,39 +248,32 @@ Claude能看到devops_echo工具吗？
 
 ## ⚠️ 重要经验教训
 
-### 为什么手动编辑 .mcp.json 不起作用？
+### 配置加载方式
 
-经过深度研究和多次测试，发现了关键问题：
+1. **`type` 字段必须是 `"http"`**（或别名 `"streamable-http"`）
+   - `"type": "url"` 是错误的
 
-1. **Claude Code不会自动扫描项目中的 `.mcp.json` 文件**
-   - 即使创建了 `.claude-plugin/plugin.json` 和 `.mcp.json`
-   - 即使设置了 `enableAllProjectMcpServers: true`
-   - 仍然不会被加载
+2. **认证用 `headersHelper`，不要用 `oauth.clientId` + 浏览器流程**
+   - 本Gateway是Client Credentials（M2M），Claude Code原生OAuth走的是
+     Authorization Code（浏览器登录），两者不匹配
+   - `headersHelper` 在连接时由脚本提供token，自动刷新，无需重启
 
-2. **必须使用 `claude mcp add-json` CLI命令**
-   - 这个命令会将配置写入Claude Code的内部配置存储
-   - 配置被持久化到 `~/.claude/` 的某个位置
-   - 只有通过CLI添加的MCP服务器才会被加载
-
-3. **`type` 字段必须是 `"http"`**
-   - 官方文档明确指出使用 `"http"` 或别名 `"streamable-http"`
-   - `"type": "url"` 是错误的（虽然在某些示例中看到过）
-
-4. **OAuth配置需要 `callbackPort`**
-   - 虽然某些示例省略了这个字段
-   - 但完整配置应包含 `callbackPort: 8080`
+3. **插件方式下 `.claude-plugin/.mcp.json` 会被加载**
+   - 顶层用 `{ "mcpServers": { ... } }` 包裹
+   - 路径用 `${CLAUDE_PLUGIN_ROOT}/scripts/get-headers.sh`
+   - 也可用 `claude mcp add-json` 在用户/项目级手动添加（路径用绝对路径）
 
 ### 正确的工作流程
 
 ```bash
-# 1. 通过CLI添加MCP服务器
-claude mcp add-json <server-name> '<json-config>'
+# 推荐：一键设置（生成凭证 + 注册MCP）
+./scripts/setup.sh
 
-# 2. 重新加载插件（在Claude Code会话中）
-/reload-plugins
+# 或手动添加
+claude mcp add-json devops-agent "{ \"type\": \"http\", \"url\": \"<GatewayUrl>\", \"headersHelper\": \"$(pwd)/scripts/get-headers.sh\" }"
 
-# 3. 验证工具可用
-# 系统会显示: mcp__<server-name>__<tool-name>
+# 在Claude Code中验证
+/mcp     # devops-agent 应为 ✓ Connected
 ```
 
 ## 下一步
@@ -341,7 +330,7 @@ cdk deploy
 
 - 检查Gateway URL是否正确
 - 确认区域是us-west-2
-- 运行 `/reload-mcp` 重新加载
+- 手动跑 `./scripts/get-headers.sh` 确认能输出token
 
 ### 问题2：认证失败
 

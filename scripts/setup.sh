@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # DevOps Agent MCP - 一键设置脚本
-# 用途: 交互式配置MCP服务器
+# 用途: 交互式配置MCP服务器（headersHelper自动刷新token方案）
 # 使用: ./setup.sh
 #
 
@@ -9,6 +9,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/token-config.sh"
+HEADERS_HELPER="${SCRIPT_DIR}/get-headers.sh"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -26,32 +27,24 @@ EOF
 echo -e "${NC}"
 
 echo ""
-echo "这个脚本将帮助你配置MCP服务器连接"
+echo "这个脚本会配置MCP服务器连接（token自动刷新，无需重启/cron）"
 echo ""
 
 # 检查前提条件
-echo -e "${YELLOW}[1/7]${NC} 检查前提条件..."
+echo -e "${YELLOW}[1/6]${NC} 检查前提条件..."
 
-if ! command -v aws &> /dev/null; then
-    echo -e "${RED}✗ AWS CLI未安装${NC}"
-    exit 1
-fi
-
-if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}✗ Python3未安装${NC}"
-    exit 1
-fi
-
-if ! command -v claude &> /dev/null; then
-    echo -e "${RED}✗ Claude Code未安装${NC}"
-    exit 1
-fi
+for cmd in aws python3 claude curl; do
+    if ! command -v "$cmd" &> /dev/null; then
+        echo -e "${RED}✗ 未安装: $cmd${NC}"
+        exit 1
+    fi
+done
 
 echo -e "${GREEN}✓ 所有前提条件满足${NC}"
 echo ""
 
 # 获取Stack输出
-echo -e "${YELLOW}[2/7]${NC} 获取CloudFormation Stack输出..."
+echo -e "${YELLOW}[2/6]${NC} 获取CloudFormation Stack输出..."
 
 STACK_NAME="DevOpsAgentMcpStack"
 REGION="us-west-2"
@@ -62,31 +55,24 @@ if ! aws cloudformation describe-stacks --stack-name $STACK_NAME --region $REGIO
     exit 1
 fi
 
-GATEWAY_URL=$(aws cloudformation describe-stacks \
-    --stack-name $STACK_NAME \
-    --region $REGION \
-    --query 'Stacks[0].Outputs[?OutputKey==`GatewayUrl`].OutputValue' \
-    --output text)
+get_output() {
+    aws cloudformation describe-stacks \
+        --stack-name $STACK_NAME --region $REGION \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+        --output text
+}
 
-CLIENT_ID=$(aws cloudformation describe-stacks \
-    --stack-name $STACK_NAME \
-    --region $REGION \
-    --query 'Stacks[0].Outputs[?OutputKey==`ClientId`].OutputValue' \
-    --output text)
-
-TOKEN_ENDPOINT=$(aws cloudformation describe-stacks \
-    --stack-name $STACK_NAME \
-    --region $REGION \
-    --query 'Stacks[0].Outputs[?OutputKey==`TokenEndpoint`].OutputValue' \
-    --output text)
+GATEWAY_URL=$(get_output GatewayUrl)
+CLIENT_ID=$(get_output ClientId)
+TOKEN_ENDPOINT=$(get_output TokenEndpoint)
 
 echo -e "${GREEN}✓ Stack输出获取成功${NC}"
 echo "  Gateway URL: $GATEWAY_URL"
 echo "  Client ID: $CLIENT_ID"
 echo ""
 
-# 获取User Pool ID和Client Secret
-echo -e "${YELLOW}[3/7]${NC} 获取Cognito配置..."
+# 获取User Pool ID、Client Secret与Scope
+echo -e "${YELLOW}[3/6]${NC} 获取Cognito配置..."
 
 USER_POOL_ID=$(aws cognito-idp list-user-pools \
     --max-results 10 \
@@ -106,20 +92,34 @@ CLIENT_SECRET=$(aws cognito-idp describe-user-pool-client \
     --query 'UserPoolClient.ClientSecret' \
     --output text)
 
+# 动态发现resource server标识符，拼出scope（避免硬编码）
+RESOURCE_SERVER=$(aws cognito-idp list-resource-servers \
+    --user-pool-id $USER_POOL_ID \
+    --max-results 10 \
+    --region $REGION \
+    --query "ResourceServers[?contains(Identifier, 'Gateway')].Identifier | [0]" \
+    --output text)
+
+if [ -z "$RESOURCE_SERVER" ] || [ "$RESOURCE_SERVER" == "None" ]; then
+    echo -e "${YELLOW}⚠ 无法自动发现resource server，使用默认scope格式${NC}"
+    RESOURCE_SERVER="DevOpsAgentMcpStack-Gateway"
+fi
+
+SCOPE="${RESOURCE_SERVER}/read ${RESOURCE_SERVER}/write"
+
 echo -e "${GREEN}✓ Cognito配置获取成功${NC}"
 echo "  User Pool ID: $USER_POOL_ID"
+echo "  Scope: $SCOPE"
 echo ""
 
 # 配置OAuth流程
-echo -e "${YELLOW}[4/7]${NC} 配置OAuth Client Credentials流程..."
+echo -e "${YELLOW}[4/6]${NC} 配置OAuth Client Credentials流程..."
 
 aws cognito-idp update-user-pool-client \
     --user-pool-id $USER_POOL_ID \
     --client-id $CLIENT_ID \
     --allowed-o-auth-flows client_credentials \
-    --allowed-o-auth-scopes \
-        "DevOpsAgentMcpStack-Gateway-0299DE6E/read" \
-        "DevOpsAgentMcpStack-Gateway-0299DE6E/write" \
+    --allowed-o-auth-scopes "${RESOURCE_SERVER}/read" "${RESOURCE_SERVER}/write" \
     --allowed-o-auth-flows-user-pool-client \
     --region $REGION \
     --output text > /dev/null
@@ -127,100 +127,62 @@ aws cognito-idp update-user-pool-client \
 echo -e "${GREEN}✓ OAuth配置完成${NC}"
 echo ""
 
-# 添加MCP服务器到Claude Code
-echo -e "${YELLOW}[5/7]${NC} 配置Claude Code MCP服务器..."
-
-MCP_CONFIG=$(cat <<EOF
-{
-  "type": "http",
-  "url": "$GATEWAY_URL",
-  "oauth": {
-    "clientId": "$CLIENT_ID"
-  }
-}
-EOF
-)
-
-# 检查是否已存在
-if claude mcp list 2>&1 | grep -q "devops-agent"; then
-    echo "MCP服务器已存在，跳过添加"
-else
-    echo "$MCP_CONFIG" | claude mcp add-json devops-agent - || true
-    echo -e "${GREEN}✓ MCP服务器已添加${NC}"
-fi
-echo ""
-
-# 获取Hash Key
-echo -e "${YELLOW}[6/7]${NC} 查找MCP配置Hash Key..."
-
-CREDENTIALS_FILE="$HOME/.claude/.credentials.json"
-
-if [ ! -f "$CREDENTIALS_FILE" ]; then
-    echo -e "${RED}✗ Claude Code credentials文件不存在${NC}"
-    echo "请先启动Claude Code一次"
-    exit 1
-fi
-
-HASH_KEY=$(cat "$CREDENTIALS_FILE" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    keys = [k for k in data.get('mcpOAuth', {}).keys() if k.startswith('devops-agent|')]
-    if keys:
-        print(keys[0])
-    else:
-        print('NOT_FOUND')
-except:
-    print('ERROR')
-")
-
-if [ "$HASH_KEY" == "NOT_FOUND" ] || [ "$HASH_KEY" == "ERROR" ]; then
-    echo -e "${YELLOW}⚠ 无法自动找到Hash Key${NC}"
-    echo "请手动运行: cat ~/.claude/.credentials.json | grep devops-agent"
-    read -p "请输入完整的Hash Key (devops-agent|xxxxx): " HASH_KEY
-fi
-
-echo -e "${GREEN}✓ Hash Key: $HASH_KEY${NC}"
-echo ""
-
-# 保存配置
-echo -e "${YELLOW}[7/7]${NC} 保存配置..."
+# 保存token配置（供get-headers.sh使用）
+echo -e "${YELLOW}[5/6]${NC} 保存凭证配置..."
 
 cat > "$CONFIG_FILE" << EOF
 #!/bin/bash
 #
 # DevOps Agent MCP - Token配置文件
-# 由setup.sh自动生成于 $(date)
+# 由setup.sh自动生成
 #
 
 CLIENT_ID="$CLIENT_ID"
 CLIENT_SECRET="$CLIENT_SECRET"
 TOKEN_ENDPOINT="$TOKEN_ENDPOINT"
-HASH_KEY="$HASH_KEY"
-SCOPE="DevOpsAgentMcpStack-Gateway-0299DE6E/read DevOpsAgentMcpStack-Gateway-0299DE6E/write"
+SCOPE="$SCOPE"
 EOF
 
 chmod 600 "$CONFIG_FILE"
-echo -e "${GREEN}✓ 配置已保存到: $CONFIG_FILE${NC}"
+chmod +x "$HEADERS_HELPER"
+echo -e "${GREEN}✓ 凭证已保存到: $CONFIG_FILE (权限600)${NC}"
+
+# 先验证一次token能成功获取
+echo "  验证token获取..."
+if "$HEADERS_HELPER" > /dev/null 2>/tmp/get-headers-check.log; then
+    echo -e "${GREEN}✓ Token获取成功${NC}"
+else
+    echo -e "${RED}✗ Token获取失败:${NC}"
+    cat /tmp/get-headers-check.log
+    rm -f /tmp/get-headers-check.log
+    exit 1
+fi
+rm -f /tmp/get-headers-check.log
 echo ""
 
-# 获取并注入token
-echo "正在获取并注入access token..."
-"${SCRIPT_DIR}/refresh-token.sh" --config "$CONFIG_FILE"
+# 配置Claude Code MCP服务器（headersHelper指向绝对路径）
+echo -e "${YELLOW}[6/6]${NC} 配置Claude Code MCP服务器..."
 
+if claude mcp list 2>&1 | grep -q "devops-agent"; then
+    echo "MCP服务器已存在，跳过添加（如需更新请先 claude mcp remove devops-agent）"
+else
+    claude mcp add-json devops-agent "{
+  \"type\": \"http\",
+  \"url\": \"$GATEWAY_URL\",
+  \"headersHelper\": \"$HEADERS_HELPER\"
+}" || true
+    echo -e "${GREEN}✓ MCP服务器已添加${NC}"
+fi
 echo ""
+
 echo -e "${GREEN}╔═══════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║   ✅ 设置完成！                          ║${NC}"
 echo -e "${GREEN}╚═══════════════════════════════════════════╝${NC}"
 echo ""
 echo "下一步:"
-echo "  1. 重启Claude Code (exit 然后 claude)"
-echo "  2. 运行 /reload-plugins"
-echo "  3. 测试: 请调用devops_echo工具，消息是\"Hello!\""
+echo "  1. 在Claude Code中运行 /mcp 查看连接状态（应为 ✓ Connected）"
+echo "  2. 测试: 请调用devops_echo工具，消息是\"Hello!\""
 echo ""
-echo "Token将在1小时后过期，届时运行:"
-echo "  ${SCRIPT_DIR}/refresh-token.sh"
-echo ""
-echo "或设置自动刷新 (每50分钟):"
-echo "  (crontab -l; echo \"*/50 * * * * ${SCRIPT_DIR}/refresh-token.sh\") | crontab -"
+echo "💡 token由 get-headers.sh 在每次连接时自动获取并缓存，过期会自动刷新。"
+echo "   无需手动刷新、无需cron、无需重启Claude Code。"
 echo ""
