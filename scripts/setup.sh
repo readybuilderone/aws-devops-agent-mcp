@@ -74,14 +74,15 @@ echo ""
 # 获取User Pool ID、Client Secret与Scope
 echo -e "${YELLOW}[3/6]${NC} 获取Cognito配置..."
 
-USER_POOL_ID=$(aws cognito-idp list-user-pools \
-    --max-results 10 \
+# 直接从Stack资源拿User Pool（Gateway建的pool名字不含stack名，按名字过滤不可靠）
+USER_POOL_ID=$(aws cloudformation describe-stack-resources \
+    --stack-name $STACK_NAME \
     --region $REGION \
-    --query "UserPools[?contains(Name, 'DevOpsAgentMcpStack')].Id" \
+    --query "StackResources[?ResourceType=='AWS::Cognito::UserPool'].PhysicalResourceId | [0]" \
     --output text)
 
-if [ -z "$USER_POOL_ID" ]; then
-    echo -e "${RED}✗ 找不到User Pool${NC}"
+if [ -z "$USER_POOL_ID" ] || [ "$USER_POOL_ID" == "None" ]; then
+    echo -e "${RED}✗ 在Stack资源中找不到User Pool${NC}"
     exit 1
 fi
 
@@ -163,16 +164,19 @@ echo ""
 # 配置Claude Code MCP服务器（headersHelper指向绝对路径）
 echo -e "${YELLOW}[6/6]${NC} 配置Claude Code MCP服务器..."
 
-if claude mcp list 2>&1 | grep -q "devops-agent"; then
-    echo "MCP服务器已存在，跳过添加（如需更新请先 claude mcp remove devops-agent）"
-else
-    claude mcp add-json devops-agent "{
+# 已存在旧条目（可能是旧的oauth/clientId方式或旧URL）时先移除，
+# 否则 add-json 不会覆盖，连接会沿用旧配置而失败。
+if claude mcp get devops-agent &> /dev/null; then
+    echo "检测到已有 devops-agent 配置，移除后用 headersHelper 重新注册..."
+    claude mcp remove devops-agent -s local &> /dev/null || true
+fi
+
+claude mcp add-json devops-agent "{
   \"type\": \"http\",
   \"url\": \"$GATEWAY_URL\",
   \"headersHelper\": \"$HEADERS_HELPER\"
 }" || true
-    echo -e "${GREEN}✓ MCP服务器已添加${NC}"
-fi
+echo -e "${GREEN}✓ MCP服务器已注册${NC}"
 echo ""
 
 echo -e "${GREEN}╔═══════════════════════════════════════════╗${NC}"
